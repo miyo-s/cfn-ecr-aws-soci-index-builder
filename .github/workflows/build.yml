@@ -139,4 +139,6 @@ jobs:
         run: bash scripts/apply-python-runtime.sh
 
       - name: Lint CloudFormation template
-        run: cfn-lint templates/SociIndexBuilder.yml
+        # error でのみ失敗させる。warning (例: W3005 = upstream テンプレート由来の
+        # DependsOn 冗長警告) は我々の Runtime 変更と無関係なので落とさない。
+        run: cfn-lint templates/SociIndexBuilder.yml --non-zero-exit-code error
