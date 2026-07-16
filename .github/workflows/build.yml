@@ -1,0 +1,81 @@
+name: build-soci-index-builder
+
+# fork したリポジトリ (miyo-s/cfn-ecr-aws-soci-index-builder) で
+# 「Lambda パッケージがきちんとビルドできるか」だけを検証するワークフロー。
+#
+# cd.yml のうち AWS 認証 (OIDC) / taskcat デプロイ / ECR scan テストは行わず、
+# ビルド部分だけを切り出したもの。デプロイ先アカウントの用意が無くても
+# fork 側でビルドの健全性を確認できる。
+#
+# ビルド対象:
+#   - Go lambda (soci-index-generator) : リポジトリ同梱の Dockerfile で静的ビルド
+#   - Python lambda (ecr-image-action-event-filtering) : zip 化
+# ビルド成果物 (zip) は artifact としてアップロードし、中身を確認できるようにする。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'functions/source/**'
+      - '.github/workflows/build.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'functions/source/**'
+      - '.github/workflows/build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --- Lambda パッケージのビルド ---
+      # .taskcat.yml は package_lambda: false のため、functions/packages/ に zip を自前で用意する。
+
+      - name: Build Go lambda (soci-index-generator)
+        # 静的ビルド (zlib-static 等) が必要なため、リポジトリ同梱の Dockerfile でビルドし upstream と揃える
+        run: |
+          set -euo pipefail
+          cd functions/source/soci-index-generator-lambda
+          docker build --platform linux/amd64 -t soci-index-generator-build .
+          mkdir -p "${GITHUB_WORKSPACE}/functions/packages/soci-index-generator-lambda"
+          container_id=$(docker create soci-index-generator-build)
+          docker cp \
+            "${container_id}:/build/soci_index_generator_lambda.zip" \
+            "${GITHUB_WORKSPACE}/functions/packages/soci-index-generator-lambda/soci_index_generator_lambda.zip"
+          docker rm "${container_id}"
+
+      - name: Build Python lambda (ecr-image-action-event-filtering)
+        run: |
+          set -euo pipefail
+          src=functions/source/ecr-image-action-event-filtering
+          dest=functions/packages/ecr-image-action-event-filtering
+          mkdir -p "${dest}"
+          (cd "${src}" && zip -j "${GITHUB_WORKSPACE}/${dest}/lambda.zip" ecr_image_action_event_filtering_lambda_function.py)
+
+      - name: Verify build artifacts exist
+        run: |
+          set -euo pipefail
+          go_zip=functions/packages/soci-index-generator-lambda/soci_index_generator_lambda.zip
+          py_zip=functions/packages/ecr-image-action-event-filtering/lambda.zip
+          for f in "${go_zip}" "${py_zip}"; do
+            if [ ! -s "${f}" ]; then
+              echo "::error::ビルド成果物が生成されていません: ${f}"
+              exit 1
+            fi
+            echo "OK: ${f} ($(du -h "${f}" | cut -f1))"
+          done
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-packages
+          path: functions/packages/
+          if-no-files-found: warn
