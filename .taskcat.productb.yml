@@ -1,0 +1,30 @@
+# product-b 用 taskcat 設定 (プレースホルダ)。
+# CI/CD では product ごとにこのファイルを --project-config-file で差し替える。
+# template は upstream のまま。Python ランタイムは scripts/apply-python-runtime.sh
+# で config/python-runtime.env の値に置換してから taskcat を実行すること。
+#
+# 注意: このリポジトリは public。実際の stack_name / ECR リポジトリ名などの
+#       機微情報はここに書かず、private 側の設定 (デプロイ用リポジトリ) で上書きする。
+project:
+  name: cfn-ecr-aws-soci-index-builder
+  s3_regional_buckets: true
+  package_lambda: false
+  parameters:
+    QSS3BucketName: $[taskcat_autobucket]
+    QSS3KeyPrefix: "cfn-ecr-aws-soci-index-builder/"
+    QSS3BucketRegion: $[taskcat_current_region]
+    SociIndexVersion: "V2"
+  lambda_source_path: functions/source
+  lambda_zip_path: functions/packages
+  template: templates/SociIndexBuilder.yml
+  regions: [ap-northeast-1]
+
+tests:
+  stg:
+    stack_name: product-b-stg-soci-index-builder
+    parameters:
+      SociRepositoryImageTagFilters: "REPLACE-ME:*"
+  prd:
+    stack_name: product-b-prd-soci-index-builder
+    parameters:
+      SociRepositoryImageTagFilters: "REPLACE-ME:*"

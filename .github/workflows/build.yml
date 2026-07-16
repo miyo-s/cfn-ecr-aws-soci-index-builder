@@ -18,11 +18,17 @@ on:
     branches: [ main ]
     paths:
       - 'functions/source/**'
+      - 'templates/**'
+      - 'config/python-runtime.env'
+      - 'scripts/apply-python-runtime.sh'
       - '.github/workflows/build.yml'
   pull_request:
     branches: [ main ]
     paths:
       - 'functions/source/**'
+      - 'templates/**'
+      - 'config/python-runtime.env'
+      - 'scripts/apply-python-runtime.sh'
       - '.github/workflows/build.yml'
 
 permissions:
@@ -79,3 +85,58 @@ jobs:
           name: lambda-packages
           path: functions/packages/
           if-no-files-found: warn
+
+  # --- A: Python Lambda が「デプロイ予定の Python バージョン」で構文的に通るか ---
+  # 実際のバージョンは config/python-runtime.env にピン留めした値を使う (単一の共有ソース)。
+  python-compat:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve target Python version
+        id: pyver
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          source config/python-runtime.env
+          # "python3.13" -> "3.13"
+          version="${PYTHON_RUNTIME#python}"
+          echo "Target runtime: ${PYTHON_RUNTIME} (python ${version})"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up target Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ steps.pyver.outputs.version }}
+
+      - name: Compile Python lambda sources (syntax check)
+        run: |
+          set -euo pipefail
+          python --version
+          # 独立した .py ファイルを対象バージョンで byte-compile し、構文が通るか確認
+          python -m py_compile \
+            functions/source/ecr-image-action-event-filtering/ecr_image_action_event_filtering_lambda_function.py
+          echo "OK: Python sources compile on $(python --version)"
+
+  # --- B: Runtime を差し替えたテンプレートが CloudFormation として妥当か ---
+  cfn-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install cfn-lint
+        run: pip install cfn-lint
+
+      - name: Apply pinned Python runtime to template
+        # upstream テンプレートは git 上では変更せず、この場で config の値に置換する
+        run: bash scripts/apply-python-runtime.sh
+
+      - name: Lint CloudFormation template
+        run: cfn-lint templates/SociIndexBuilder.yml
